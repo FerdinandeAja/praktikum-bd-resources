@@ -1,290 +1,322 @@
 package com.example.bdsqltester.scenes.admin;
 
+import com.example.bdsqltester.HelloApplication;
 import com.example.bdsqltester.datasources.GradingDataSource;
 import com.example.bdsqltester.datasources.MainDataSource;
 import com.example.bdsqltester.dtos.Assignment;
-import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.event.ActionEvent;
 import javafx.fxml.FXML;
+import javafx.fxml.FXMLLoader;
+import javafx.fxml.Initializable;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
-import javafx.scene.layout.StackPane;
 import javafx.stage.Stage;
 
+import java.io.IOException;
+import java.net.URL;
 import java.sql.*;
 import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.ResourceBundle;
+import java.util.stream.Collectors;
 
-public class AdminController {
+public class AdminController implements Initializable {
 
+    @FXML
+    private ListView<Assignment> assignmentList;
+    @FXML
+    private TextField idField;
+    @FXML
+    private TextField nameField;
+    @FXML
+    private TextArea instructionsField;
     @FXML
     private TextArea answerKeyField;
 
-    @FXML
-    private ListView<Assignment> assignmentList = new ListView<>();
+    private ObservableList<Assignment> assignments = FXCollections.observableArrayList();
+    private Assignment selectedAssignment;
+
+    @Override
+    public void initialize(URL url, ResourceBundle resourceBundle) {
+        assignmentList.setItems(assignments);
+        loadAssignments();
+
+        assignmentList.getSelectionModel().selectedItemProperty().addListener((observable, oldValue, newValue) -> {
+            selectedAssignment = newValue;
+            if (selectedAssignment != null) {
+                populateFields(selectedAssignment);
+            } else {
+                clearFields();
+            }
+        });
+    }
+
+    private void loadAssignments() {
+        assignments.clear();
+        try (Connection connection = MainDataSource.getConnection();
+             Statement statement = connection.createStatement();
+             ResultSet resultSet = statement.executeQuery("SELECT id, name, instructions, answer_key FROM assignments")) {
+            while (resultSet.next()) {
+                Assignment assignment = new Assignment();
+                assignment.setId(resultSet.getLong("id"));
+                assignment.setName(resultSet.getString("name"));
+                assignment.setInstructions(resultSet.getString("instructions"));
+                assignment.setAnswerKey(resultSet.getString("answer_key"));
+                assignments.add(assignment);
+            }
+        } catch (SQLException e) {
+            showAlert("Error Database", "Gagal memuat daftar tugas.");
+            e.printStackTrace();
+        }
+    }
+
+    private void populateFields(Assignment assignment) {
+        idField.setText(String.valueOf(assignment.getId()));
+        nameField.setText(assignment.getName());
+        instructionsField.setText(assignment.getInstructions());
+        answerKeyField.setText(assignment.getAnswerKey());
+    }
+
+    private void clearFields() {
+        idField.clear();
+        nameField.clear();
+        instructionsField.clear();
+        answerKeyField.clear();
+        selectedAssignment = null;
+    }
 
     @FXML
-    private TextField idField;
+    void onNewAssignmentClick(ActionEvent event) {
+        clearFields();
+    }
 
     @FXML
-    private TextArea instructionsField;
+    void onSaveClick(ActionEvent event) {
+        String name = nameField.getText();
+        String instructions = instructionsField.getText();
+        String answerKey = answerKeyField.getText();
 
-    @FXML
-    private TextField nameField;
+        if (name.isEmpty() || instructions.isEmpty() || answerKey.isEmpty()) {
+            showAlert("Peringatan", "Harap isi semua kolom.");
+            return;
+        }
 
-    private final ObservableList<Assignment> assignments = FXCollections.observableArrayList();
+        try (Connection connection = MainDataSource.getConnection()) {
+            String sql;
+            PreparedStatement preparedStatement;
 
-    @FXML
-    void initialize() {
-        // Set idField to read-only
-        idField.setEditable(false);
-        idField.setMouseTransparent(true);
-        idField.setFocusTraversable(false);
-
-        // Populate the ListView with assignment names
-        refreshAssignmentList();
-
-        assignmentList.setCellFactory(param -> new ListCell<Assignment>() {
-            @Override
-            protected void updateItem(Assignment item, boolean empty) {
-                super.updateItem(item, empty);
-                if (empty || item == null) {
-                    setText(null);
-                } else {
-                    setText(item.name);
-                }
+            if (name.isEmpty() || instructions.isEmpty() || answerKey.isEmpty()) {
+                sql = "UPDATE assignments SET name = ?, instructions = ?, answer_key = ? WHERE id = ?";
+                preparedStatement = connection.prepareStatement(sql);
+                preparedStatement.setString(1, name);
+                preparedStatement.setString(2, instructions);
+                preparedStatement.setString(3, answerKey);
+                preparedStatement.setLong(4, selectedAssignment.getId());
+            } else {
+                sql = "INSERT INTO assignments (name, instructions, answer_key) VALUES (?, ?, ?)";
+                preparedStatement = connection.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS);
+                preparedStatement.setString(1, name);
+                preparedStatement.setString(2, instructions);
+                preparedStatement.setString(3, answerKey);
             }
 
-            // Bind the onAssignmentSelected method to the ListView
-            @Override
-            public void updateSelected(boolean selected) {
-                super.updateSelected(selected);
-                if (selected) {
-                    onAssignmentSelected(getItem());
+            int rowsAffected = preparedStatement.executeUpdate();
+            if (rowsAffected > 0) {
+                showAlert("Sukses", "Tugas berhasil disimpan.");
+                loadAssignments(); // Refresh list
+            } else {
+                showAlert("Error", "Gagal menyimpan tugas.");
+            }
+
+        } catch (SQLException e) {
+            showAlert("Error Database", "Gagal menyimpan tugas ke database.");
+            e.printStackTrace();
+        }
+    }
+
+    @FXML
+    void onDeleteClick(ActionEvent event) {
+        if (selectedAssignment == null) {
+            showAlert("Peringatan", "Pilih tugas yang ingin dihapus.");
+            return;
+        }
+
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle("Konfirmasi Hapus");
+        alert.setHeaderText("Hapus Tugas");
+        alert.setContentText("Apakah Anda yakin ingin menghapus tugas dengan ID " + selectedAssignment.getId() + "?");
+
+        alert.showAndWait().ifPresent(response -> {
+            if (response == ButtonType.OK) {
+                try (Connection connection = MainDataSource.getConnection();
+                     PreparedStatement preparedStatement = connection.prepareStatement("DELETE FROM assignments WHERE id = ?")) {
+                    preparedStatement.setLong(1, selectedAssignment.getId());
+                    int rowsAffected = preparedStatement.executeUpdate();
+                    if (rowsAffected > 0) {
+                        showAlert("Sukses", "Tugas berhasil dihapus.");
+                        loadAssignments(); // Refresh list
+                        clearFields();
+                    } else {
+                        showAlert("Error", "Gagal menghapus tugas.");
+                    }
+                } catch (SQLException e) {
+                    showAlert("Error Database", "Gagal menghapus tugas dari database.");
+                    e.printStackTrace();
                 }
             }
         });
     }
 
-    void refreshAssignmentList() {
-        // Clear the current list
-        assignments.clear();
-
-        // Re-populate the ListView with assignment names
-        try (Connection c = MainDataSource.getConnection()) {
-            Statement stmt = c.createStatement();
-            ResultSet rs = stmt.executeQuery("SELECT * FROM assignments");
-
-            while (rs.next()) {
-                // Create a new assignment object
-                assignments.addAll(new Assignment(rs));
-            }
-        } catch (Exception e) {
-            Alert alert = new Alert(Alert.AlertType.ERROR);
-            alert.setTitle("Error");
-            alert.setHeaderText("Database Error");
-            alert.setContentText(e.toString());
-        }
-
-        // Set the ListView to display assignment names
-        assignmentList.setItems(assignments);
-
-        // Set currently selected to the id inside the id field
-        // This is inefficient, you can optimize this.
-        try {
-            if (!idField.getText().isEmpty()) {
-                long id = Long.parseLong(idField.getText());
-                for (Assignment assignment : assignments) {
-                    if (assignment.id == id) {
-                        assignmentList.getSelectionModel().select(assignment);
-                        break;
-                    }
-                }
-            }
-        } catch (NumberFormatException e) {
-            // Ignore, idField is empty
-        }
-    }
-
-    void onAssignmentSelected(Assignment assignment) {
-        // Set the id field
-        idField.setText(String.valueOf(assignment.id));
-
-        // Set the name field
-        nameField.setText(assignment.name);
-
-        // Set the instructions field
-        instructionsField.setText(assignment.instructions);
-
-        // Set the answer key field
-        answerKeyField.setText(assignment.answerKey);
-    }
-
     @FXML
-    void onNewAssignmentClick(ActionEvent event) {
-        // Clear the contents of the id field
-        idField.clear();
-
-        // Clear the contents of all text fields
-        nameField.clear();
-        instructionsField.clear();
-        answerKeyField.clear();
+    void onTestButtonClick(ActionEvent event) {
+        if (selectedAssignment == null) {
+            showAlert("Peringatan", "Pilih tugas untuk diuji.");
+            return;
+        }
+        testAnswerKey(selectedAssignment);
     }
 
-    @FXML
-    void onSaveClick(ActionEvent event) {
-        // If id is set, update, else insert
-        if (idField.getText().isEmpty()) {
-            // Insert new assignment
-            try (Connection c = MainDataSource.getConnection()) {
-                PreparedStatement stmt = c.prepareStatement("INSERT INTO assignments (name, instructions, answer_key) VALUES (?, ?, ?)", Statement.RETURN_GENERATED_KEYS);
-                stmt.setString(1, nameField.getText());
-                stmt.setString(2, instructionsField.getText());
-                stmt.setString(3, answerKeyField.getText());
-                stmt.executeUpdate();
+    private void testAnswerKey(Assignment assignment) {
+        TextInputDialog dialog = new TextInputDialog(assignment.getAnswerKey());
+        dialog.setTitle("Uji Kunci Jawaban");
+        dialog.setHeaderText("Masukkan query untuk diuji dengan kunci jawaban:");
+        dialog.setContentText("Query:");
 
-                ResultSet rs = stmt.getGeneratedKeys();
-                if (rs.next()) {
-                    // Get generated id, update idField
-                    idField.setText(String.valueOf(rs.getLong(1)));
-                }
-            } catch (Exception e) {
-                Alert alert = new Alert(Alert.AlertType.ERROR);
-                alert.setTitle("Error");
-                alert.setHeaderText("Database Error");
-                alert.setContentText(e.toString());
+        dialog.showAndWait().ifPresent(userQuery -> {
+            int result = compareAndGrade(userQuery, assignment.getAnswerKey());
+            showAlert("Hasil Tes", "Hasil Perbandingan:", getComparisonResultText(result));
+        });
+    }
+
+    private String getComparisonResultText(int result) {
+        return switch (result) {
+            case 100 -> "Jawaban benar (identik).";
+            case 50 -> "Jawaban sebagian benar (isi sama, urutan beda).";
+            case 0 -> "Jawaban salah.";
+            default -> "Gagal membandingkan.";
+        };
+    }
+
+    private int compareAndGrade(String userAnswerQuery, String correctAnswerQuery) {
+        try (Connection gradingConnection = GradingDataSource.getConnection();
+             Statement userStatement = gradingConnection.createStatement();
+             ResultSet userResultSet = userStatement.executeQuery(userAnswerQuery);
+             Statement correctStatement = gradingConnection.createStatement();
+             ResultSet correctResultSet = correctStatement.executeQuery(correctAnswerQuery)) {
+
+            List<List<String>> userResults = getResultSetAsList(userResultSet);
+            List<List<String>> correctResults = getResultSetAsList(correctResultSet);
+
+            if (userResults.equals(correctResults)) {
+                return 100;
+            } else if (areContentsEqualIgnoringOrder(userResults, correctResults)) {
+                return 50;
+            } else {
+                return 0;
             }
-        } else {
-            // Update existing assignment
-            try (Connection c = MainDataSource.getConnection()) {
-                PreparedStatement stmt = c.prepareStatement("UPDATE assignments SET name = ?, instructions = ?, answer_key = ? WHERE id = ?");
-                stmt.setString(1, nameField.getText());
-                stmt.setString(2, instructionsField.getText());
-                stmt.setString(3, answerKeyField.getText());
-                stmt.setInt(4, Integer.parseInt(idField.getText()));
-                stmt.executeUpdate();
-            } catch (Exception e) {
-                Alert alert = new Alert(Alert.AlertType.ERROR);
-                alert.setTitle("Error");
-                alert.setHeaderText("Database Error");
-                alert.setContentText(e.toString());
+
+        } catch (SQLException e) {
+            showAlert("Error", "Gagal Membandingkan Jawaban");
+            return -1; // Return nilai error jika gagal membandingkan
+        }
+    }
+
+    private List<List<String>> getResultSetAsList(ResultSet resultSet) throws SQLException {
+        List<List<String>> results = new ArrayList<>(); // Inisialisasi ArrayList
+        ResultSetMetaData metaData = resultSet.getMetaData();
+        int columnCount = metaData.getColumnCount();
+        while (resultSet.next()) {
+            List<String> row = new ArrayList<>(); // Inisialisasi ArrayList
+            for (int i = 1; i <= columnCount; i++) {
+                row.add(Objects.toString(resultSet.getObject(i)));
+            }
+            results.add(row);
+        }
+        return results;
+    }
+
+    private boolean areContentsEqualIgnoringOrder(List<List<String>> list1, List<List<String>> list2) {
+        if (list1.size() != list2.size()) {
+            return false;
+        }
+        List<List<String>> sortedList1 = list1.stream().map(row -> row.stream().sorted().collect(Collectors.toList())).sorted(this::compareRows).collect(Collectors.toList());
+        List<List<String>> sortedList2 = list2.stream().map(row -> row.stream().sorted().collect(Collectors.toList())).sorted(this::compareRows).collect(Collectors.toList());
+        return sortedList1.equals(sortedList2);
+    }
+
+    private int compareRows(List<String> row1, List<String> row2) {
+        for (int i = 0; i < Math.min(row1.size(), row2.size()); i++) {
+            int comparisonResult = row1.get(i).compareTo(row2.get(i));
+            if (comparisonResult != 0) {
+                return comparisonResult;
             }
         }
-
-        // Refresh the assignment list
-        refreshAssignmentList();
+        return Integer.compare(row1.size(), row2.size());
     }
 
     @FXML
     void onShowGradesClick(ActionEvent event) {
-        // Make sure id is set
-        if (idField.getText().isEmpty()) {
-            Alert alert = new Alert(Alert.AlertType.ERROR);
-            alert.setTitle("Error");
-            alert.setHeaderText("No Assignment Selected");
-            alert.setContentText("Please select an assignment to view grades.");
-            alert.showAndWait();
+        if (selectedAssignment == null) {
+            showAlert("Peringatan", "Pilih tugas untuk melihat nilai pengguna.");
             return;
+        }
+
+        try {
+            long assignmentId = selectedAssignment.getId();
+            String assignmentName = selectedAssignment.getName();
+
+            FXMLLoader loader = new FXMLLoader(getClass().getResource("/com/example/bdsqltester/assignment-user-grades-view.fxml"));
+            Stage stage = new Stage();
+            stage.setTitle("Nilai Pengguna untuk Tugas: " + assignmentName);
+            stage.setScene(new Scene(loader.load()));
+
+            AssignmentUserGradesController controller = loader.getController();
+            controller.setAssignmentId(assignmentId);
+            controller.setAssignmentName(assignmentName);
+
+            stage.show();
+
+        } catch (IOException e) {
+            showAlert("Error", "Gagal memuat tampilan nilai pengguna.");
+            e.printStackTrace();
         }
     }
 
     @FXML
-    void onTestButtonClick(ActionEvent event) {
-        // Display a window containing the results of the query.
-
-        // Create a new window/stage
-        Stage stage = new Stage();
-        stage.setTitle("Query Results");
-
-        // Display in a table view.
-        TableView<ArrayList<String>> tableView = new TableView<>();
-
-        ObservableList<ArrayList<String>> data = FXCollections.observableArrayList();
-        ArrayList<String> headers = new ArrayList<>(); // To check if any columns were returned
-
-        // Use try-with-resources for automatic closing of Connection, Statement, ResultSet
-        try (Connection conn = GradingDataSource.getConnection();
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(answerKeyField.getText())) {
-
-            ResultSetMetaData metaData = rs.getMetaData();
-            int columnCount = metaData.getColumnCount();
-
-            // 1. Get Headers and Create Table Columns
-            for (int i = 1; i <= columnCount; i++) {
-                final int columnIndex = i - 1; // Need final variable for lambda (0-based index for ArrayList)
-                String headerText = metaData.getColumnLabel(i); // Use label for potential aliases
-                headers.add(headerText); // Keep track of headers
-
-                TableColumn<ArrayList<String>, String> column = new TableColumn<>(headerText);
-
-                // Define how to get the cell value for this column from an ArrayList<String> row object
-                column.setCellValueFactory(cellData -> {
-                    ArrayList<String> rowData = cellData.getValue();
-                    // Ensure rowData exists and the index is valid before accessing
-                    if (rowData != null && columnIndex < rowData.size()) {
-                        return new SimpleStringProperty(rowData.get(columnIndex));
-                    } else {
-                        return new SimpleStringProperty(""); // Should not happen with current logic, but safe fallback
-                    }
-                });
-                column.setPrefWidth(120); // Optional: set a preferred width
-                tableView.getColumns().add(column);
-            }
-
-            // 2. Get Data Rows
-            while (rs.next()) {
-                ArrayList<String> row = new ArrayList<>();
-                for (int i = 1; i <= columnCount; i++) {
-                    // Retrieve all data as String. Handle NULLs gracefully.
-                    String value = rs.getString(i);
-                    row.add(value != null ? value : ""); // Add empty string for SQL NULL
-                }
-                data.add(row);
-            }
-
-            // 3. Check if any results (headers or data) were actually returned
-            if (headers.isEmpty() && data.isEmpty()) {
-                // Handle case where query might be valid but returns no results
-                Alert infoAlert = new Alert(Alert.AlertType.INFORMATION);
-                infoAlert.setTitle("Query Results");
-                infoAlert.setHeaderText(null);
-                infoAlert.setContentText("The query executed successfully but returned no data.");
-                infoAlert.showAndWait();
-                return; // Exit the method, don't show the empty table window
-            }
-
-            // 4. Set the data items into the table
-            tableView.setItems(data);
-
-            // 5. Create layout and scene
-            StackPane root = new StackPane();
-            root.getChildren().add(tableView);
-            Scene scene = new Scene(root, 800, 600); // Adjust size as needed
-
-            // 6. Set scene and show stage
+    void onLogoutClick(ActionEvent event) {
+        try {
+            FXMLLoader fxmlLoader = new FXMLLoader(getClass().getResource("/com/example/bdsqltester/login-view.fxml"));
+            Scene scene = new Scene(fxmlLoader.load());
+            Stage stage = new Stage();
+            stage.setTitle("Login");
             stage.setScene(scene);
             stage.show();
 
-        } catch (SQLException e) {
-            // Log the error and show an alert to the user
-            e.printStackTrace(); // Print stack trace to console/log for debugging
-            Alert errorAlert = new Alert(Alert.AlertType.ERROR);
-            errorAlert.setTitle("Database Error");
-            errorAlert.setHeaderText("Failed to execute query or retrieve results.");
-            errorAlert.setContentText("SQL Error: " + e.getMessage());
-            errorAlert.showAndWait();
-        } catch (Exception e) {
-            // Catch other potential exceptions (e.g., class loading if driver not found)
-            e.printStackTrace(); // Print stack trace to console/log for debugging
-            Alert errorAlert = new Alert(Alert.AlertType.ERROR);
-            errorAlert.setTitle("Error");
-            errorAlert.setHeaderText("An unexpected error occurred.");
-            errorAlert.setContentText(e.getMessage());
-            errorAlert.showAndWait();
+            // Tutup tampilan admin saat ini
+            ((Stage) (((Button) event.getSource()).getScene().getWindow())).close();
+
+        } catch (IOException e) {
+            showAlert("Error", "Gagal memuat tampilan login.");
+            e.printStackTrace();
         }
-    } // End of onTestButtonClick method
+    }
 
+    private void showAlert(String title, String content) {
+        Alert alert = new Alert(Alert.AlertType.INFORMATION);
+        alert.setTitle(title);
+        alert.setHeaderText(null);
+        alert.setContentText(content);
+        alert.showAndWait();
+    }
 
+    private void showAlert(String title, String header, String content) {
+        Alert alert = new Alert(Alert.AlertType.INFORMATION);
+        alert.setTitle(title);
+        alert.setHeaderText(header);
+        alert.setContentText(content);
+        alert.showAndWait();
+    }
 }

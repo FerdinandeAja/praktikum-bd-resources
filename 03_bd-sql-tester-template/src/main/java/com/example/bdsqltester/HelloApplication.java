@@ -4,16 +4,29 @@ import javafx.application.Application;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Scene;
 import javafx.stage.Stage;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 
 public class HelloApplication extends Application {
     private static HelloApplication applicationInstance;
     private Stage primaryStage;
-    public static HelloApplication getApplicationInstance () { return applicationInstance; }
-    public Stage getPrimaryStage () { return primaryStage; }
+    private String loggedInUsername; // Tambahkan variabel untuk menyimpan username
+
+    public static HelloApplication getApplicationInstance () {
+        return applicationInstance;
+    }
+
+    public Stage getPrimaryStage () {
+        return primaryStage;
+    }
+
+    public String getLoggedInUsername() {
+        return loggedInUsername;
+    }
+
+    public void setLoggedInUsername(String loggedInUsername) {
+        this.loggedInUsername = loggedInUsername;
+    }
 
     @Override
     public void start(Stage stage) throws IOException {
